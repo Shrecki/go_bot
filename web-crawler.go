@@ -327,7 +327,7 @@ func check_and_update_missions(chan_id string) bool{
 	}();
 	// On doit aller chercher les missions sur le forum et les garder dans leur map.
 	res := <- out1;
-	str := res.String_vals; // FirstLevelCrawl("https://la-force-vivante.forumsrpg.com/f21-missions-disponibles");
+	str := res.String_vals;
 	increase_wait := false;
 	if !res.Get_ok {
 		log.Println("Something went wrong! Setting timer to wait some more")
@@ -365,8 +365,9 @@ func check_and_update_missions(chan_id string) bool{
 			id_list := make([]string, len(msgs));
 			for i := range msgs {
 				str_author := msgs[i].Author
-				// Consider only bot messages and ignore first one (which is a response)
+				// On ne considère que les messages du bot
 				if str_author.ID == s.State.User.ID{
+					log.Println("I found messages I own")
 					str_content += msgs[i].Content + "\n";
 					id_list[n_messages] = msgs[i].ID;
 					n_messages += 1;
@@ -406,6 +407,8 @@ func check_and_update_missions(chan_id string) bool{
 					s.ChannelMessagesBulkDelete(chan_id, id_list[0:n_messages])
 					// Send response
 					emit_response(s, string_to_send, chan_id)
+				} else {
+					log.Println("Messages identical: nothing to be done")
 				}
 			} else {
 				log.Println("No messages so far in this channel!");
@@ -481,7 +484,7 @@ var(
 				if _, ok := guilds_watched[i.Interaction.GuildID]; !ok {
 					// On crée une nouvelle queue et un nouveau Ticker
 					quit := make(chan struct{})
-					// La durée est en secondes. On souhaite un rafraîchissement tous les quatre jours, soit toutes les 
+					// La durée est en secondes. On souhaite un rafraîchissement tous les quatre jours, soit toutes les
 					// 345600 secondes
 					go watchdog(345600, quit, chan_id);
 				} else {
