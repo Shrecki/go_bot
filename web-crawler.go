@@ -570,10 +570,13 @@ func main(){
 	  s.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
 			log.Printf("Logged in as: %v#%v", s.State.User.Username, s.State.User.Discriminator)
 		})
+
 		err := s.Open()
 		if err != nil {
 			log.Fatalf("Cannot open the session: %v", err)
 		}
+
+		log.Println("My ID is %v", s.State.User.ID);
 
 		log.Println("Adding commands...")
 		registeredCommands := make([]*discordgo.ApplicationCommand, len(commands))
