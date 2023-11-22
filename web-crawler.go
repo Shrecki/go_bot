@@ -563,9 +563,8 @@ var(
 				if _, ok := guilds_watched[i.Interaction.GuildID]; !ok {
 					// On crée une nouvelle queue et un nouveau Ticker
 					quit := make(chan struct{})
-					// La durée est en secondes. On souhaite un rafraîchissement tous les quatre jours, soit toutes les
-					// 345600 secondes
-					go watchdog(345600, quit, chan_id);
+					// La durée est en secondes. On souhaite un rafraîchissement toutes les 10 minutes, soit toutes les 600 secondes
+					go watchdog(600, quit, chan_id);
 				} else {
 					guilds_watched[i.Interaction.GuildID] = "watched";
 				}
