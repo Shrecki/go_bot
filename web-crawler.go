@@ -266,6 +266,27 @@ func conv_map_texte(missions map[string][]string) ([]string, []string, []string,
 			}
 		}
 
+	taches = taches[:n_taches]
+	primes = primes[:n_primes]
+	contrats = contrats[:n_contrats]
+	campagnes = campagnes[:n_camps]
+
+	// On trie en fonction des 13 premiers caractères!
+	sort.SliceStable(taches, func(i, j int) bool {
+		return taches[i][:13] < taches[j][:13]
+	});
+
+	sort.SliceStable(primes, func(i, j int) bool {
+		return primes[i][:13] < primes[j][:13]
+	});
+
+	sort.SliceStable(contrats, func(i, j int) bool {
+		return contrats[i][:13] < contrats[j][:13]
+	});
+
+	sort.SliceStable(campagnes, func(i, j int) bool {
+		return campagnes[i][:13] < campagnes[j][:13]
+	});
 		// Une fois les différentes cartes constituées, on les retourne tout simplement
 	return taches, primes, contrats, campagnes, n_taches, n_primes, n_contrats, n_camps;
 }
@@ -563,8 +584,9 @@ var(
 				if _, ok := guilds_watched[i.Interaction.GuildID]; !ok {
 					// On crée une nouvelle queue et un nouveau Ticker
 					quit := make(chan struct{})
-					// La durée est en secondes. On souhaite un rafraîchissement toutes les 10 minutes, soit toutes les 600 secondes
-					go watchdog(600, quit, chan_id);
+					// La durée est en secondes. On souhaite un rafraîchissement tous les quatre jours, soit toutes les
+					// 345600 secondes
+					go watchdog(345600, quit, chan_id);
 				} else {
 					guilds_watched[i.Interaction.GuildID] = "watched";
 				}
