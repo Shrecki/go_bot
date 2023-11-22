@@ -3,10 +3,10 @@ package main
 import (
 	//"fmt"
 	"sync"
-        "github.com/PuerkitoBio/goquery"
-        "net/http"
-        "log"
-        "strings"
+  "github.com/PuerkitoBio/goquery"
+  "net/http"
+  "log"
+  "strings"
 	"flag"
 	"os"
 	"time"
@@ -17,9 +17,9 @@ import (
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
 	"golang.org/x/text/runes"
+	"golang.org/x/net/html"
 	"github.com/bwmarrin/discordgo"
-				//"math"
-
+	"regexp"
 )
 
 func removeAccents(s string) string  {
@@ -127,16 +127,53 @@ type PairString struct {
 	Strings []string
 	Get_ok bool
 }
+
+type PairHrefs struct {
+	Hrefs []*html.Node
+	Get_ok bool
+}
+
+func WalkPathsAndExtractContents(hrefs []*html.Node) Pair{
+	wg := &sync.WaitGroup{}
+	missions_web := make(map[string][]string)
+	ch := make(chan PairString)
+
+	flag  := true;
+	for _, h := range hrefs {
+		href := h.Attr[1].Val;
+		wg.Add(1)
+		go ExtracteurMission(wg, "https://la-force-vivante.forumsrpg.com" + href, ch)
+	}
+
+	// On demande aux groupes de patienter en matière de synchro
+	go func(){
+		wg.Wait();
+		close(ch)
+	}()
+	for i := range ch {
+			// On va aller chercher ici si quelque chose s'est mal passé. Si oui, on va mettre à false le flag!
+			if i.Get_ok {
+				curr_str := i.Strings
+				missions_web[curr_str[0]] = curr_str[1:];
+			} else {
+				flag = false;
+				break;
+			}
+	}
+  return Pair{missions_web, flag}
+}
+
 // Only crawls to first level
-func FirstLevelCrawl(url string) Pair{
-        wg := &sync.WaitGroup{}
+func FirstLevelCrawl(url string) PairHrefs{
+        //wg := &sync.WaitGroup{}
 				//wg_discord := &sync.WaitGroup{}
 
-        missions_web := make(map[string][]string)
+        //missions_web := make(map[string][]string)
 				// Create a single channel to be used within
-				ch := make(chan PairString)
+				//ch := make(chan PairString)
 				res, err := http.Get(url)
 				//ch_discord := make(chan []string)
+				var hrefs []*html.Node; // := nil;
 
 				if err != nil {
 					log.Fatal(err)
@@ -156,30 +193,9 @@ func FirstLevelCrawl(url string) Pair{
 					}
 
 					// Get all links in the page
-					hrefs := doc.Find(".topictitle").Nodes;
-					for _, h := range hrefs {
-						href := h.Attr[1].Val;
-						wg.Add(1)
-						go ExtracteurMission(wg, "https://la-force-vivante.forumsrpg.com" + href, ch)
-					}
-
-					// On demande aux groupes de patienter en matière de synchro
-					go func(){
-						wg.Wait();
-						close(ch)
-					}()
-					for i := range ch {
-						  // On va aller chercher ici si quelque chose s'est mal passé. Si oui, on va mettre à false le flag!
-							if i.Get_ok {
-								curr_str := i.Strings
-								missions_web[curr_str[0]] = curr_str[1:];
-							} else {
-								flag = false;
-								break;
-							}
-					}
+					hrefs = doc.Find(".topictitle").Nodes;
 				}
-				return Pair{missions_web, flag}
+				return PairHrefs{hrefs, flag}
 }
 
 func init() { flag.Parse() }
@@ -312,10 +328,53 @@ func emit_response(s *discordgo.Session, string_to_send string, chan_id string){
 	}
 }
 
+/**
+* Renvoie les URLs dans les messages du bots sous la forme d'une liste
+**/
+func get_bot_message_URLs(msgs []*discordgo.Message) []string{
+	var url_list []string;
+	// On a quelque chose à faire!
+	if len(msgs) > 0 {
+		// Si messages présents: on récupère le contenu DANS L'ORDRE DE MESSAGES CROISSANTS.
+		// On va donc devoir les trier par timestamp
+		sort.SliceStable(msgs, func(i, j int) bool {
+			return msgs[i].ID < msgs[j].ID
+		});
+
+		str_content := ""
+		n_messages := 0
+		id_list := make([]string, len(msgs));
+		for i := range msgs {
+			str_author := msgs[i].Author
+			// On ne considère que les messages du bot
+			if str_author.ID == s.State.User.ID{
+				log.Println("I found messages I own")
+				str_content += msgs[i].Content + "\n";
+				id_list[n_messages] = msgs[i].ID;
+				n_messages += 1;
+			}
+		}
+
+		if n_messages > 0 {
+			// On construit une liste d'urls, en fonction du nombre de messages. Rien de plus simple!
+			re := regexp.MustCompile("\\(https.*\n")
+      url_matches := re.FindStringSubmatch(str_content)
+			url_list = make([]string, len(url_matches))
+			for i, match := range url_matches {
+				url_list[i] = match[1:len(match)-2];
+			}
+		}
+	}
+
+	return url_list;
+
+}
+
 
 func check_and_update_missions(chan_id string) bool{
-	out1 := make(chan Pair)
+	out1 := make(chan PairHrefs)
 	out2 := make(chan []*discordgo.Message)
+	out3 := make(chan Pair)
 
 	go func() {
 			out1 <- FirstLevelCrawl("https://la-force-vivante.forumsrpg.com/f21-missions-disponibles");
@@ -327,7 +386,7 @@ func check_and_update_missions(chan_id string) bool{
 	}();
 	// On doit aller chercher les missions sur le forum et les garder dans leur map.
 	res := <- out1;
-	str := res.String_vals;
+	hrefs_online := res.Hrefs;
 	increase_wait := false;
 	if !res.Get_ok {
 		log.Println("Something went wrong! Setting timer to wait some more")
@@ -335,91 +394,60 @@ func check_and_update_missions(chan_id string) bool{
 	} else {
 		msgs := <- out2;
 		log.Printf("Hi")
-		// Let's time!
-		start := time.Now()
 
-		// TODO: convertir à la place la map vers une 2nd map, qui serait [contrat: [], prime: [], tâche: [], campagne: []]
-		// On peut ensuite classer chaque mission par son type à la place.y
-		// Pour épargner des caractères, on peut ensuite synthétiser chaque camp par un smiley.
-		// Enfin, on peut garder l'employeur par soucis de simplicité.
-		taches, primes, contrats, campagnes, n_taches, n_primes, n_contrats, n_campagnes := conv_map_texte(str);
-		elapsed_1 := time.Since(start)
-		log.Printf("Elapsed %v",elapsed_1)
-		string_to_send := convertToSingleString(campagnes, contrats, primes, taches, n_campagnes, n_contrats, n_primes, n_taches);
+		// On va regarder le contenu des hrefs. Pour ceci, on va prendre dans les messages Discord
+		// tous les URLs disponibles. On vérifie que les deux listes d'URLs ont la même taille.
+		// Si ce n'est pas le cas, soit une mission n'est plus dispo, soit une nouvelle mission est dispo: il faut mettre à jour
+		// Sinon, on doit comparer les URLs entre eux. On peut donc tout simplement construire une map et vérifier l'égalité des deux.
+		url_list := get_bot_message_URLs(msgs);
 
-		if len(msgs) == 0 {
-			log.Println("No messages so far in this channel!");
-			// Si aucun message: on doit générer le message total à partir de la map !
-			emit_response(s, string_to_send, chan_id)
-			log.Println("Sent?")
+		different := false
+		if len(hrefs_online) == len(url_list) {
+			// Compare the hrefs one by one to check potential diffs: create a small url map
+			url_map := make(map[string]int)
+			for _, url_bot := range url_list {
+				url_map[url_bot] = 1;
+			}
+
+			for _, h := range hrefs_online {
+				url_online :=  "https://la-force-vivante.forumsrpg.com" + h.Attr[1].Val
+				_, ok := url_map[url_online];
+				// Une URL du forum n'est pas sur le Discord!
+				if !ok {
+					different = true;
+					break;
+				}
+			}
 		} else {
-
-			// Si messages présents: on récupère le contenu DANS L'ORDRE DE MESSAGES CROISSANTS.
-			// On va donc devoir les trier par timestamp
-			sort.SliceStable(msgs, func(i, j int) bool {
-				return msgs[i].ID < msgs[j].ID
-			});
-
-			str_content := ""
-			n_messages := 0
-			id_list := make([]string, len(msgs));
-			for i := range msgs {
-				str_author := msgs[i].Author
-				// On ne considère que les messages du bot
-				if str_author.ID == s.State.User.ID{
-					log.Println("I found messages I own")
-					str_content += msgs[i].Content + "\n";
-					id_list[n_messages] = msgs[i].ID;
-					n_messages += 1;
-				}
-			}
-
-			if n_messages > 0 {
-				split_content := strings.Split(str_content, ":right_arrow:")[0];
-				// Keep only first part of the messages. Compare in bulk their contents. If equal to fetched string, all good, otherwise delete all messages and post them back
-				split_content_line_by_line := strings.Split(split_content, "\n");
-				string_to_send_line_by_line := strings.Split(string_to_send, "\n");
-
-				map_strs := make(map[string] int)
-				for k := range split_content_line_by_line {
-					if split_content_line_by_line[k] != "" && !strings.Contains(split_content_line_by_line[k], "#"){
-						map_strs[strings.TrimSpace(split_content_line_by_line[k])] = 1;
-					}
-				}
-
-				different := false;
-
-				for k := range string_to_send_line_by_line {
-					if string_to_send_line_by_line[k] != ""  && !strings.Contains(split_content_line_by_line[k], "#"){
-						_, ok := map_strs[strings.TrimSpace(string_to_send_line_by_line[k])];
-						if !ok {
-							different = true;
-							log.Println("Différence(s):")
-							log.Println(strings.TrimSpace(string_to_send_line_by_line[k]));
-							log.Println(map_strs);
-							break;
-						}
-					}
-				}
-
-				if different {
-					// Delete all irrelevant messages
-					s.ChannelMessagesBulkDelete(chan_id, id_list[0:n_messages])
-					// Send response
-					emit_response(s, string_to_send, chan_id)
-				} else {
-					log.Println("Messages identical: nothing to be done")
-				}
-			} else {
-				log.Println("No messages so far in this channel!");
-
-				// Si aucun message: on doit générer le message total à partir de la map !
-				emit_response(s, string_to_send, chan_id)
-				log.Println("Sent?")
-			}
-
+			different = true;
 		}
 
+		// Si le contenu diffère, on doit aller chercher le contenu en ligne pour mettre à jour le Discord.
+		// Il faut donc supprimer *tous* les messages du bot sur le channel et régénérer simultanément le message à envoyer.
+		if different {
+			// On doit aller chercher le contenu des pages et générer un nouveau message.
+			log.Println("New message to be sent!")
+
+			// On extrait ici les pages sous forme de liste
+			go func(){
+				out3 <- WalkPathsAndExtractContents(hrefs_online);
+			}()
+			res := <- out3;
+			missions_extraites := res.String_vals;
+			ok := res.Get_ok;
+			if !ok {
+				increase_wait = true;
+			} else {
+				taches, primes, contrats, campagnes, n_taches, n_primes, n_contrats, n_campagnes := conv_map_texte(missions_extraites);
+				string_to_send := convertToSingleString(campagnes, contrats, primes, taches, n_campagnes, n_contrats, n_primes, n_taches);
+
+				// On supprime tous les messages du bot
+				s.ChannelMessagesBulkDelete(chan_id, id_list[0:n_messages])
+
+				// On émet la réponse
+				emit_response(s, string_to_send, chan_id)
+			}
+		}
 	}
 
 	return increase_wait;
