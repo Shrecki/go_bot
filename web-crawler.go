@@ -328,12 +328,39 @@ func emit_response(s *discordgo.Session, string_to_send string, chan_id string){
 	}
 }
 
+func filter_bot_messages(msgs []*discordgo.Message) []*discordgo.Message{
+	bot_msgs := make([]*discordgo.Message, len(msgs))
+	n_messages := 0
+
+	if len(msgs) > 0 {
+		// Si messages présents: on récupère le contenu DANS L'ORDRE DE MESSAGES CROISSANTS.
+		// On va donc devoir les trier par timestamp
+		sort.SliceStable(msgs, func(i, j int) bool {
+			return msgs[i].ID < msgs[j].ID
+		});
+
+		for i := range msgs {
+			str_author := msgs[i].Author
+			// On ne considère que les messages du bot
+			if str_author.ID == s.State.User.ID{
+				log.Println("I found messages I own")
+				bot_msgs[n_messages] = msgs[i]
+				n_messages ++;
+			}
+		}
+	}
+
+	return bot_msgs[:n_messages];
+
+}
+
 /**
 * Renvoie les URLs dans les messages du bots sous la forme d'une liste
 **/
 func get_bot_message_URLs(msgs []*discordgo.Message) []string{
-	var url_list []string;
 	// On a quelque chose à faire!
+	url_list := make([]string, 200);
+	n_matches := 0
 	if len(msgs) > 0 {
 		// Si messages présents: on récupère le contenu DANS L'ORDRE DE MESSAGES CROISSANTS.
 		// On va donc devoir les trier par timestamp
@@ -342,31 +369,22 @@ func get_bot_message_URLs(msgs []*discordgo.Message) []string{
 		});
 
 		str_content := ""
-		n_messages := 0
-		id_list := make([]string, len(msgs));
 		for i := range msgs {
-			str_author := msgs[i].Author
-			// On ne considère que les messages du bot
-			if str_author.ID == s.State.User.ID{
-				log.Println("I found messages I own")
 				str_content += msgs[i].Content + "\n";
-				id_list[n_messages] = msgs[i].ID;
-				n_messages += 1;
-			}
 		}
 
-		if n_messages > 0 {
-			// On construit une liste d'urls, en fonction du nombre de messages. Rien de plus simple!
-			re := regexp.MustCompile("\\(https.*\n")
-      url_matches := re.FindStringSubmatch(str_content)
-			url_list = make([]string, len(url_matches))
-			for i, match := range url_matches {
-				url_list[i] = match[1:len(match)-2];
-			}
+		// On construit une liste d'urls, en fonction du nombre de messages. Rien de plus simple!
+		re := regexp.MustCompile("\\(https.*\\)")
+    url_matches := re.FindAllString(str_content, -1)
+		n_matches = len(url_matches);
+		//url_list := make([]string, len(url_matches))
+		for i, match := range url_matches {
+			url_list[i] = match[1:len(match)-1];
 		}
+
 	}
 
-	return url_list;
+	return url_list[:n_matches];
 
 }
 
@@ -375,6 +393,9 @@ func check_and_update_missions(chan_id string) bool{
 	out1 := make(chan PairHrefs)
 	out2 := make(chan []*discordgo.Message)
 	out3 := make(chan Pair)
+	out4 := make(chan []string)
+	out5 := make(chan []string)
+
 
 	go func() {
 			out1 <- FirstLevelCrawl("https://la-force-vivante.forumsrpg.com/f21-missions-disponibles");
@@ -389,28 +410,42 @@ func check_and_update_missions(chan_id string) bool{
 	hrefs_online := res.Hrefs;
 	increase_wait := false;
 	if !res.Get_ok {
-		log.Println("Something went wrong! Setting timer to wait some more")
+		log.Println("First page fetch failed. Increasing timer.")
 		increase_wait = true;
 	} else {
 		msgs := <- out2;
-		log.Printf("Hi")
-
 		// On va regarder le contenu des hrefs. Pour ceci, on va prendre dans les messages Discord
 		// tous les URLs disponibles. On vérifie que les deux listes d'URLs ont la même taille.
 		// Si ce n'est pas le cas, soit une mission n'est plus dispo, soit une nouvelle mission est dispo: il faut mettre à jour
 		// Sinon, on doit comparer les URLs entre eux. On peut donc tout simplement construire une map et vérifier l'égalité des deux.
-		url_list := get_bot_message_URLs(msgs);
+		go func(){
+			filt_msgs := filter_bot_messages(msgs);
+			url_list := get_bot_message_URLs(filt_msgs);
+			msg_ids := make([]string, len(filt_msgs))
+			// Keep only message IDs!
+			for i := range filt_msgs {
+				msg_ids[i] = filt_msgs[i].ID
+			}
+			out4 <- url_list
+			out5 <- msg_ids
+		}()
+
+		//
 
 		different := false
-		if len(hrefs_online) == len(url_list) {
+		bot_url_list := <- out4;
+		msg_ids := <- out5;
+
+		if len(hrefs_online) == len(bot_url_list) {
 			// Compare the hrefs one by one to check potential diffs: create a small url map
 			url_map := make(map[string]int)
-			for _, url_bot := range url_list {
-				url_map[url_bot] = 1;
+			for _, url_bot := range bot_url_list {
+				url_bot_split := strings.Split(url_bot, "https://la-force-vivante.forumsrpg.com")[1]
+				url_map[url_bot_split] = 1;
 			}
 
 			for _, h := range hrefs_online {
-				url_online :=  "https://la-force-vivante.forumsrpg.com" + h.Attr[1].Val
+				url_online :=  h.Attr[1].Val
 				_, ok := url_map[url_online];
 				// Une URL du forum n'est pas sur le Discord!
 				if !ok {
@@ -426,7 +461,7 @@ func check_and_update_missions(chan_id string) bool{
 		// Il faut donc supprimer *tous* les messages du bot sur le channel et régénérer simultanément le message à envoyer.
 		if different {
 			// On doit aller chercher le contenu des pages et générer un nouveau message.
-			log.Println("New message to be sent!")
+			log.Println("Preparing messages to be sent.")
 
 			// On extrait ici les pages sous forme de liste
 			go func(){
@@ -442,7 +477,7 @@ func check_and_update_missions(chan_id string) bool{
 				string_to_send := convertToSingleString(campagnes, contrats, primes, taches, n_campagnes, n_contrats, n_primes, n_taches);
 
 				// On supprime tous les messages du bot
-				s.ChannelMessagesBulkDelete(chan_id, id_list[0:n_messages])
+				s.ChannelMessagesBulkDelete(chan_id, msg_ids)
 
 				// On émet la réponse
 				emit_response(s, string_to_send, chan_id)
