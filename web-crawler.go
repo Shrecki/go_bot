@@ -202,6 +202,7 @@ func init() { flag.Parse() }
 
 var s *discordgo.Session
 var guilds_watched map[string] string;
+var BotID string;
 
 var (
 	GuildID        = flag.String("guild", "", "Test guild ID. If not passed - bot registers commands globally")
@@ -305,22 +306,37 @@ func SendMessageNoEmbed(s *discordgo.Session, chan_id string, content string) (*
 
 func emit_response(s *discordgo.Session, string_to_send string, chan_id string){
 	if len(string_to_send) > 2000 {
-		// Split in sub-messages. To do so, simply iterate over lines.
+		// Split in sub-messages. We first create these substrings and then send them one by one to ensure consistent ordering.
 		split_str := strings.Split(string_to_send, "\n");
+		msg_contents := make([]string, len(split_str));
 		n_words := 0
 		curr_start := 0
+		curr_msg := 0
 		for i := range split_str {
 			if len(split_str[i]) + n_words < 2000 {
 				// Reached last line and need to send it
 				if i == len(split_str) -1 {
-					SendMessageNoEmbed(s, chan_id, strings.Join(split_str[curr_start:i], "\n"));
+					msg_contents[curr_msg] = strings.Join(split_str[curr_start:i], "\n")
+					//SendMessageNoEmbed(s, chan_id, );
+					curr_msg++;
 				} else {
 					n_words += len(split_str[i])
 				}
 			} else {
-				SendMessageNoEmbed(s, chan_id, strings.Join(split_str[curr_start:i], "\n"));
+				msg_contents[curr_msg] = strings.Join(split_str[curr_start:i], "\n");
+				curr_msg++;
+				//SendMessageNoEmbed(s, chan_id, strings.Join(split_str[curr_start:i], "\n"));
 				curr_start = i;
 				n_words = len(split_str[i]);
+			}
+		}
+
+		// Now, we will send each message and wait until the message is done to send another one.
+		for msg_i := range msg_contents[:curr_msg] {
+			_, err := SendMessageNoEmbed(s, chan_id, msg_contents[msg_i]);
+			if err != nil {
+				log.Println("Something happened during message transmission")
+				log.Println(err);
 			}
 		}
 	} else {
@@ -342,10 +358,12 @@ func filter_bot_messages(msgs []*discordgo.Message) []*discordgo.Message{
 		for i := range msgs {
 			str_author := msgs[i].Author
 			// On ne considère que les messages du bot
-			if str_author.ID == s.State.User.ID{
+			if str_author.ID == s.State.User.ID {
 				log.Println("I found messages I own")
 				bot_msgs[n_messages] = msgs[i]
 				n_messages ++;
+			} else {
+				log.Println("Posted by ", str_author.Username)
 			}
 		}
 	}
@@ -576,12 +594,13 @@ func main(){
 			log.Fatalf("Cannot open the session: %v", err)
 		}
 
-		log.Println("My ID is %v", s.State.User.ID);
+		BotID = s.State.User.ID;
+		log.Println("My ID is %v", BotID);
 
 		log.Println("Adding commands...")
 		registeredCommands := make([]*discordgo.ApplicationCommand, len(commands))
 		for i, v := range commands {
-			cmd, err := s.ApplicationCommandCreate(s.State.User.ID, *GuildID, v)
+			cmd, err := s.ApplicationCommandCreate(BotID, *GuildID, v)
 			if err != nil {
 				log.Panicf("Cannot create '%v' command: %v", v.Name, err)
 			}
@@ -607,7 +626,7 @@ func main(){
 			// }
 
 			for _, v := range registeredCommands {
-				err := s.ApplicationCommandDelete(s.State.User.ID, *GuildID, v.ID)
+				err := s.ApplicationCommandDelete(BotID, *GuildID, v.ID)
 				if err != nil {
 					log.Panicf("Cannot delete '%v' command: %v", v.Name, err)
 				}
