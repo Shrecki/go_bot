@@ -362,8 +362,6 @@ func filter_bot_messages(msgs []*discordgo.Message) []*discordgo.Message{
 				log.Println("I found messages I own")
 				bot_msgs[n_messages] = msgs[i]
 				n_messages ++;
-			} else {
-				log.Println("Posted by ", str_author.Username)
 			}
 		}
 	}
