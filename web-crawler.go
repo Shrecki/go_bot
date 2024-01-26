@@ -386,6 +386,9 @@ func filter_bot_messages(msgs []*discordgo.Message) []*discordgo.Message{
 			}
 		}
 	}
+	
+	log.Println("Done with finding my messages");
+	log.Println(n_messages);
 
 	return bot_msgs[:n_messages];
 
@@ -414,6 +417,8 @@ func get_bot_message_URLs(msgs []*discordgo.Message) []string{
 		re := regexp.MustCompile("\\(https.*\\)")
     url_matches := re.FindAllString(str_content, -1)
 		n_matches = len(url_matches);
+
+		url_list = make([]string, n_matches);
 		//url_list := make([]string, len(url_matches))
 		for i, match := range url_matches {
 			url_list[i] = match[1:len(match)-1];
@@ -513,8 +518,27 @@ func check_and_update_missions(chan_id string) bool{
 				taches, primes, contrats, campagnes, n_taches, n_primes, n_contrats, n_campagnes := conv_map_texte(missions_extraites);
 				string_to_send := convertToSingleString(campagnes, contrats, primes, taches, n_campagnes, n_contrats, n_primes, n_taches);
 
+
+				//log.Println(string_to_send);
+				
 				// On supprime tous les messages du bot
+				log.Println("Moving in to delete messages")
+				log.Println(len(msg_ids))
+				
+				/*for _, id := range msg_ids {
+					s.ChannelMessageDelete(chan_id, id)
+				}*/
+				
+				/*
+				if len(msg_ids) > 5 {
+			             s.ChannelMessagesBulkDelete(chan_id, msg_ids[:5])
+				} else {
+				     s.ChannelMessagesBulkDelete(chan_id, msg_ids)
+				}
+				*/
+				
 				s.ChannelMessagesBulkDelete(chan_id, msg_ids)
+
 
 				// On émet la réponse
 				emit_response(s, string_to_send, chan_id)
@@ -527,21 +551,21 @@ func check_and_update_missions(chan_id string) bool{
 }
 
 func watchdog(original_delay float64, quit chan struct{}, chan_id string) {
-		ticker := time.NewTicker(time.Duration(original_delay) * time.Second)
-		current_delay := original_delay;
+    ticker := time.NewTicker(time.Duration(original_delay) * time.Second)
+    current_delay := original_delay;
     for {
        select {
         case <- ticker.C:
-					  log.Println("Querying server...")
-						increase_wait := check_and_update_missions(chan_id);
-						if increase_wait {
-							current_delay = current_delay * 2;
-							ticker.Stop()
-							ticker = time.NewTicker(time.Second * time.Duration(current_delay));
-						} else {
-							ticker.Stop()
-							ticker = time.NewTicker(time.Duration(original_delay) * time.Second);
-						}
+	  log.Println("Querying server...")
+	  increase_wait := check_and_update_missions(chan_id);
+	  if increase_wait {
+		current_delay = current_delay * 2;
+		ticker.Stop()
+		ticker = time.NewTicker(time.Second * time.Duration(current_delay));
+	  } else {
+		ticker.Stop()
+		ticker = time.NewTicker(time.Duration(original_delay) * time.Second);
+	  }
         case <- quit:
             ticker.Stop()
             return
@@ -603,6 +627,28 @@ func init() {
 		})
 }
 
+/*
+func startup_command(guild *discordgo.Guild){
+
+    // We want to put in the channel: -> we should thus try to get the appropriate channel ID, no?
+    _, err := s.State.Guild(guild.ID)
+    isInGuild := err == nil
+    if isInGuild {
+        // We only act if IN this guild!
+        log.Println(guild.ID);
+        
+        for _, c := range guild.Channels {
+            perms, err_c := s.UserChannelPermissions(BotID, c.ID);
+            if err_c == nil {
+                log.Println(c.Name);
+            	log.Println(perms & (discordgo.PermissionManageMessages | discordgo.PermissionViewChannel | discordgo.PermissionAllText));
+            }
+        }
+        
+    }
+}
+*/
+
 func main(){
 	  s.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
 			log.Printf("Logged in as: %v#%v", s.State.User.Username, s.State.User.Discriminator)
@@ -615,6 +661,7 @@ func main(){
 
 		BotID = s.State.User.ID;
 		log.Println("My ID is %v", BotID);
+		log.Println("My current channels: ");
 
 		log.Println("Adding commands...")
 		registeredCommands := make([]*discordgo.ApplicationCommand, len(commands))
@@ -630,6 +677,12 @@ func main(){
 
 		stop := make(chan os.Signal, 1)
 		signal.Notify(stop, os.Interrupt)
+		
+		// Call the bot to start!
+		/*for _, g := range s.State.Ready.Guilds {
+			startup_command(g);
+		}*/
+		
 		log.Println("Press Ctrl+C to exit")
 		<-stop
 
